@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>FlightRadar Clone</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+  body, html { height: 100%; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; }
+
+  body.dark { background: #1a1a1a; color: #fff; }
+  body.light { background: #f5f5f5; color: #000; }
+
+  .app { display: flex; height: 100vh; }
+
+  .sidebar {
+    width: 360px; background: #222; border-right: 1px solid #333;
+    display: flex; flex-direction: column;
+  }
+  body.light .sidebar { background: #fff; border-right: 1px solid #ddd; }
+
+  .sidebar-header { padding: 12px 16px; background: #2a2a2a; border-bottom: 1px solid #333; }
+  body.light .sidebar-header { background: #f0f0f0; border-bottom: 1px solid #ddd; }
+
+  .sidebar-header h2 { font-size: 16px; font-weight: 600; color: #ffa500; }
+
+  .search-box { padding: 10px 16px; background: #2a2a2a; }
+  body.light .search-box { background: #f0f0f0; }
+
+  .search-box input, .search-box select {
+    width: 100%; padding: 8px 10px; margin-top: 6px;
+    background: #1a1a1a; border: 1px solid #333; border-radius: 4px;
+    color: #fff; font-size: 13px;
+  }
+  body.light .search-box input, body.light .search-box select {
+    background: #fff; border: 1px solid #ddd; color: #000;
+  }
+
+  .stats { padding: 10px 16px; font-size: 12px; color: #aaa; border-bottom: 1px solid #333; }
+  body.light .stats { color: #555; border-bottom: 1px solid #ddd; }
+
+  .error { padding: 8px 16px; font-size: 12px; background: #dc2626; display: none; }
+
+  .aircraft-list { flex: 1; overflow-y: auto; }
+
+  .aircraft-row {
+    padding: 8px 16px; border-bottom: 1px solid #333;
+    cursor: pointer; font-size: 12px;
+  }
+  body.light .aircraft-row { border-bottom: 1px solid #ddd; }
+  .aircraft-row:hover { background: #2a2a2a; }
+  body.light .aircraft-row:hover { background: #f0f0f0; }
+
+  .aircraft-row .callsign { font-weight: 600; color: #4da6ff; }
+  .aircraft-row .info { color: #aaa; font-size: 11px; margin-top: 2px; }
+  body.light .aircraft-row .info { color: #666; }
+
+  .map-container { flex: 1; position: relative; }
+  #map { height: 100%; width: 100%; }
+
+  .top-btn {
+    position: absolute; top: 10px; right: 10px; z-index: 1000;
+    background: #222; border: 1px solid #333; color: #fff;
+    padding: 8px 12px; border-radius: 4px; cursor: pointer; margin-left: 5px;
+  }
+  body.light .top-btn { background: #fff; border: 1px solid #ddd; color: #000; }
+
+  .leaflet-popup-content-wrapper { background: #1a1a1a; color: #fff; border-radius: 4px; }
+  body.light .leaflet-popup-content-wrapper { background: #fff; color: #000; }
+  body.light .leaflet-popup-tip { background: #fff; }
+</style>
+</head>
+<body class="dark">
+<div class="app">
+  <div class="sidebar">
+    <div class="sidebar-header"><h2>FLIGHT TRACKER</h2></div>
+    <div class="search-box">
+      <input type="text" id="search" placeholder="Search flight, ICAO...">
+      <select id="filter">
+        <option value="all">All Flights</option>
+        <option value="air">Airborne Only</option>
+        <option value="ground">On Ground Only</option>
+      </select>
+    </div>
+    <div class="stats" id="stats">Loading...</div>
+    <div class="error" id="error"></div>
+    <div class="aircraft-list" id="aircraftList"></div>
+  </div>
+
+  <div class="map-container">
+    <button class="top-btn" onclick="toggleTheme()" style="right:90px;">🌓</button>
+    <button class="top-btn" onclick="fetchData()">⟳</button>
+    <div id="map"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-rotatedmarker@0.2.0/leaflet.rotatedMarker.js"></script>
+<script>
+let isDark = true;
+let tileLayer;
+let aircraftData = {};
+
+const map = L.map('map').setView([-8.65, 115.21], 6);
+
+function setMapTheme(dark) {
+  if (tileLayer) map.removeLayer(tileLayer);
+  if (dark) {
+    tileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+  } else {
+    tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+  }
+}
+setMapTheme(true);
+
+function toggleTheme() {
+  isDark = !isDark;
+  document.body.className = isDark ? 'dark' : 'light';
+  setMapTheme(isDark);
+}
+
+function createIcon(heading, color) {
+  return L.divIcon({
+    className: 'plane-icon',
+    html: `<div style="transform: rotate(${heading || 0}deg);">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="${color}">
+        <path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V21l3-1 3 1v-1.5L13 19v-5.5l8 2.5z"/>
+      </svg>
+    </div>`,
+    iconSize: [24, 24], iconAnchor: [12, 12]
+  });
+}
+
+async function fetchData() {
+  const errorBox = document.getElementById('error');
+  errorBox.style.display = 'none';
+  
+  try {
+    // Pakai CORS proxy biar bisa jalan dari file://
+    const res = await fetch('https://api.allorigins.win/raw?url=https://opensky-network.org/api/states/all');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    
+    const data = await res.json();
+    if (!data.states) {
+      document.getElementById('stats').textContent = 'No aircraft data';
+      return;
+    }
+
+    updateMap(data.states);
+  } catch (e) {
+    document.getElementById('stats').textContent = 'Failed to load data';
+    errorBox.textContent = 'Error: ' + e.message + '. Try upload to Netlify for best result.';
+    errorBox.style.display = 'block';
+    console.error(e);
+  }
+}
+
+function updateMap(states) {
+  const search = document.getElementById('search').value.toLowerCase();
+  const filter = document.getElementById('filter').value;
+  
+  let stats = { total: 0, air: 0, ground: 0 };
+  let listHTML = '';
+
+  // Hapus marker lama
+  map.eachLayer(layer => {
+    if (layer.options && layer.options.isAircraft) map.removeLayer(layer);
+  });
+
+  states.forEach(s => {
+    const [icao24, callsign, origin, time, lon, lat, alt, onGround, velocity, heading] = s;
+    if (!lat || !lon) return;
+    if (velocity < 30 && onGround) return;
+
+    stats.total++;
+    if (onGround) stats.ground++; else stats.air++;
+
+    const callsignClean = callsign ? callsign.trim() : 'N/A';
+    const searchable = `${icao24} ${callsignClean}`.toLowerCase();
+
+    if (search && !searchable.includes(search)) return;
+    if (filter === 'air' && onGround) return;
+    if (filter === 'ground' && !onGround) return;
+
+    const color = onGround ? '#ffa500' : '#4da6ff';
+    L.marker([lat, lon], {
+      icon: createIcon(heading, color),
+      isAircraft: true
+    }).addTo(map).bindPopup(`
+      <b>${callsignClean}</b><br>
+      ICAO: ${icao24}<br>
+      Alt: ${alt ? Math.round(alt) + 'm' : 'N/A'}<br>
+      Speed: ${velocity ? Math.round(velocity * 3.6) + 'km/h' : 'N/A'}
+    `);
+
+    listHTML += `<div class="aircraft-row">
+      <div class="callsign">${callsignClean}</div>
+      <div class="info">${alt ? Math.round(alt) + 'm' : 'N/A'} | ${velocity ? Math.round(velocity * 3.6) + 'km/h' : 'N/A'}</div>
+    </div>`;
+  });
+
+  document.getElementById('stats').innerHTML = `${stats.total} aircraft<br>
+    <span style="color:#4da6ff;">${stats.air} airborne</span> |
+    <span style="color:#ffa500;">${stats.ground} on ground</span>`;
+  document.getElementById('aircraftList').innerHTML = listHTML;
+}
+
+document.getElementById('search').oninput = fetchData;
+document.getElementById('filter').onchange = fetchData;
+
+// Load pertama kali
+fetchData();
+// Auto refresh tiap 15 detik
+setInterval(fetchData, 15000);
+</script>
+</body>
+</html>
